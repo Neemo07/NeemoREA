@@ -26,14 +26,22 @@ NeemoREA gives an agent the fastest known command path for each target type, the
 ## Repository layout
 
 ```text
-SKILL.md            Entry point: scope, rules, tool map, first moves, router, recipes
+SKILL.md                Entry point: scope, rules, tool map, first moves, router, recipes
 references/
-  pe.md             PE triage, packer check, headless Ghidra decompile, rebuild-and-verify
-LICENSE             MIT
-README.md           This file
+  pe.md                 PE triage, packer check, headless Ghidra decompile, rebuild-and-verify
+  dotnet.md             .NET single-file AppHost unpack, WPF BAML, Costura, R2R/NativeAOT, obfuscators
+  electron.md           ASAR unpack, Fuses, IPC/preload audit, native .node addons, Bytenode, Node SEA
+  mobile.md             APK/DEX, IPA + FairPlay, Flutter Dart AOT, Hermes, IL2CPP
+scripts/
+  validate.py           Frontmatter, reference links, code-block syntax, installer round trip
+  test_fixtures.py      Functional tests: ASAR unpacker, installer safety, CRLF handling
+install.sh              Installer for OpenCode, Claude Code, Codex CLI, Cursor
+.gitattributes          Forces LF line endings (shell scripts break on CRLF)
+LICENSE                 MIT
+README.md               This file
 ```
 
-`SKILL.md` is the fast path. `references/pe.md` is read only when the target is PE or the task is a rebuild / Ghidra pseudocode dump.
+`SKILL.md` is the fast path. Each file in `references/` is read only when the target (or task) needs it: PE or a rebuild / Ghidra dump, .NET, Electron / Node SEA, or mobile.
 
 ## How it works
 
@@ -54,17 +62,26 @@ Use `install.sh` to install `SKILL.md` and `references/` for **OpenCode**, **Cla
 ./install.sh --opencode          # ~/.config/opencode/skills/neemorea
 ./install.sh --claude            # ~/.claude/skills/neemorea
 ./install.sh --codex             # ~/.agents/skills/neemorea
-./install.sh --cursor            # ~/.cursor/rules/neemorea.mdc (+ references/)
+./install.sh --cursor            # ~/.cursor/rules/neemorea/ (neemorea.mdc + references/)
 ./install.sh --all               # all four targets (--uninstall to remove)
 ```
 
-Or copy manually into any agent skill directory (folder name should match `neemorea`):
+Or copy manually into any agent skill directory (the folder name must be `neemorea`):
 
 ```sh
-cp -R neemorea ~/.claude/skills/neemorea
-cp -R neemorea ~/.config/opencode/skills/neemorea
-cp -R neemorea ~/.agents/skills/neemorea
+mkdir -p ~/.claude/skills/neemorea && cp -R SKILL.md references ~/.claude/skills/neemorea/
+mkdir -p ~/.config/opencode/skills/neemorea && cp -R SKILL.md references ~/.config/opencode/skills/neemorea/
+mkdir -p ~/.agents/skills/neemorea && cp -R SKILL.md references ~/.agents/skills/neemorea/
 ```
+
+## Development
+
+```sh
+python3 scripts/validate.py       # structure, links, syntax of every embedded code block
+python3 scripts/test_fixtures.py  # functional tests against generated fixtures
+```
+
+Files must use LF line endings. On Windows run `git config core.autocrlf input` before cloning, or `git add --renormalize .` in an existing checkout.
 
 ## Usage
 

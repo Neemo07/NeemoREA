@@ -56,6 +56,29 @@ def check_references(errors: list[str]) -> int:
     return len(actual)
 
 
+def check_line_endings(errors: list[str]) -> None:
+    """Shell scripts and awk/frontmatter parsing break on CRLF, so require LF everywhere."""
+    targets = [ROOT / "SKILL.md", ROOT / "README.md", ROOT / "install.sh", ROOT / "scripts" / "validate.py",
+               *sorted((ROOT / "references").glob("*.md"))]
+    for f in targets:
+        if f.is_file() and b"\r" in f.read_bytes():
+            fail(f"{f.relative_to(ROOT)}: contains CR (CRLF line endings); use LF (see .gitattributes, `git add --renormalize .`)", errors)
+
+
+def check_readme_layout(errors: list[str]) -> None:
+    """The README layout tree must list every file in references/ and scripts/."""
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    m = re.search(r"## Repository layout\s+```text\n(.*?)```", text, re.DOTALL)
+    if not m:
+        fail("README.md: '## Repository layout' text block not found", errors)
+        return
+    tree = m.group(1)
+    for sub in ("references", "scripts"):
+        for p in sorted((ROOT / sub).iterdir()):
+            if p.is_file() and p.name not in tree:
+                fail(f"README.md: layout block does not list {sub}/{p.name}", errors)
+
+
 def check_code_blocks(md_files: list[pathlib.Path], errors: list[str]) -> tuple[int, int]:
     sh_checked = 0
     py_checked = 0
@@ -99,7 +122,8 @@ def check_installer(errors: list[str]) -> bool:
             ".config/opencode/skills/neemorea/SKILL.md",
             ".claude/skills/neemorea/SKILL.md",
             ".agents/skills/neemorea/SKILL.md",
-            ".cursor/rules/neemorea.mdc",
+            ".cursor/rules/neemorea/neemorea.mdc",
+            ".cursor/rules/neemorea/references/pe.md",
         ):
             if not (pathlib.Path(tmp) / rel).is_file():
                 fail(f"install.sh: missing expected installed file '{rel}'", errors)
@@ -121,7 +145,9 @@ def main() -> int:
     if skill_kb > SKILL_MAX_KB:
         fail(f"SKILL.md is {skill_kb:.1f} KB > {SKILL_MAX_KB:.1f} KB budget; move detail to references/", errors)
 
+    check_line_endings(errors)
     check_frontmatter(skill_path.read_text(encoding="utf-8"), errors)
+    check_readme_layout(errors)
     n_refs = check_references(errors)
     md_files = [ROOT / "SKILL.md", ROOT / "README.md", *sorted((ROOT / "references").glob("*.md"))]
     n_sh, n_py = check_code_blocks(md_files, errors)

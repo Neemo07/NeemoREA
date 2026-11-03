@@ -15,7 +15,7 @@ Agents (default when omitted: --claude):
   --opencode       ~/.config/opencode/skills/neemorea
   --claude         ~/.claude/skills/neemorea
   --codex          ~/.agents/skills/neemorea
-  --cursor         ~/.cursor/rules/neemorea.mdc (+ references/)
+  --cursor         ~/.cursor/rules/neemorea/neemorea.mdc (+ neemorea/references/)
   --all            install for all four agents above
 
 Options:
@@ -54,19 +54,23 @@ install_skill_dir() {
 }
 
 install_cursor_rule() {
-  local rules_dir="$1"
-  mkdir -p "$rules_dir"
+  local rules_dir="$1" dest="$1/neemorea"
+  # Everything lives under rules/neemorea/ so we never touch the user's own rules or references/ dirs.
+  rm -rf "$dest"
+  mkdir -p "$dest"
   {
     printf '%s\n' "---"
     printf '%s\n' "description: NeemoREA — reverse engineer shipped software with plain local CLI tools."
     printf '%s\n' 'globs: ["**/*"]'
     printf '%s\n' "alwaysApply: false"
     printf '%s\n\n' "---"
-    awk 'NR==1 && /^---$/{in_fm=1; next} in_fm && /^---$/{in_fm=0; next} !in_fm{print}' "$REPO_DIR/SKILL.md"
-  } > "$rules_dir/neemorea.mdc"
-  rm -rf "$rules_dir/references"
-  cp -R "$REPO_DIR/references" "$rules_dir/references"
-  echo "installed: $rules_dir/neemorea.mdc (+ references/)"
+    # tr -d '\r' keeps the frontmatter strip working on CRLF checkouts
+    tr -d '\r' < "$REPO_DIR/SKILL.md" | awk 'NR==1 && /^---$/{in_fm=1; next} in_fm && /^---$/{in_fm=0; next} !in_fm{print}'
+  } > "$dest/neemorea.mdc"
+  cp -R "$REPO_DIR/references" "$dest/references"
+  # Remove the flat file older versions of this installer wrote (never the shared references/ dir).
+  rm -f "$rules_dir/neemorea.mdc"
+  echo "installed: $dest/neemorea.mdc (+ references/)"
 }
 
 for agent in "${AGENTS[@]}"; do
@@ -79,9 +83,9 @@ for agent in "${AGENTS[@]}"; do
 
   if [[ "$ACTION" == "uninstall" ]]; then
     if [[ "$agent" == "cursor" ]]; then
-      rm -f "$target/neemorea.mdc"
-      rm -rf "$target/references"
-      echo "removed:   $target/neemorea.mdc"
+      rm -rf "$target/neemorea"
+      rm -f "$target/neemorea.mdc"   # legacy flat install
+      echo "removed:   $target/neemorea"
     else
       rm -rf "$target"
       echo "removed:   $target"

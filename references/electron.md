@@ -36,9 +36,9 @@ When the network is restricted (`npx -y @electron/asar` unavailable) or header i
 mkdir -p "$D/asar" && python3 - "$A" "$D/asar" <<'E'
 import json, os, struct, sys
 with open(sys.argv[1], "rb") as f:
-  hdr = f.read(16)
-  _, hsz, u2, u3 = struct.unpack("<IIII", hdr)
-  joff, jlen = (12, u2) if hdr[12:13] == b"{" else (16, u3)
+  hdr = f.read(17)  # 16 header bytes + the first JSON byte
+  _, hsz, u2, u3 = struct.unpack("<IIII", hdr[:16])
+  joff, jlen = (16, u3) if hdr[16:17] == b"{" else (12, u2)  # JSON starts at 16 in the standard layout; byte 12 is a length byte, never test it
   f.seek(joff); tree = json.loads(f.read(jlen).decode("utf-8"))
   base = 8 + hsz
   def walk(node, rel=""):
