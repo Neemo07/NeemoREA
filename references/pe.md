@@ -6,23 +6,24 @@ Contents: 1 Triage · 2 Packed? · 3 Structure for free · 4 Locate behavior · 
 
 ## 0. Setup (run first, every command below assumes it)
 ```sh
-T=./x.exe; D=${TMPDIR:-/tmp}/re/$(basename $T); mkdir -p $D
+T=./x.exe; D="${TMPDIR:-/tmp}/re/$(basename "$T")"; mkdir -p "$D"
 ```
 
 ## 1. Triage (one call)
 ```sh
-python3 - $T <<'E'
-import sys,pefile
-p=pefile.PE(sys.argv[1]); o=p.OPTIONAL_HEADER
-print("machine",hex(p.FILE_HEADER.Machine),"subsys",o.Subsystem,"ts",p.FILE_HEADER.TimeDateStamp,"entry",hex(o.AddressOfEntryPoint),"base",hex(o.ImageBase))
-print("managed(.NET)" if o.DATA_DIRECTORY[14].VirtualAddress else "native")
-for s in p.sections: print(s.Name.rstrip(b'\0').decode(),hex(s.VirtualAddress),"raw",s.SizeOfRawData,"ent",round(s.get_entropy(),2))
-for d in getattr(p,"DIRECTORY_ENTRY_IMPORT",[]): print(d.dll.decode(),[i.name.decode() for i in d.imports if i.name][:30])
-for e in getattr(getattr(p,"DIRECTORY_ENTRY_EXPORT",None),"symbols",[])[:80]: print("exp",e.name,hex(e.address))
+python3 - "$T" <<'E'
+import sys, pefile
+dec = lambda b: b.decode("latin1", "replace") if isinstance(b, (bytes, bytearray)) else str(b or "")
+p = pefile.PE(sys.argv[1]); o = p.OPTIONAL_HEADER
+print("machine", hex(p.FILE_HEADER.Machine), "subsys", o.Subsystem, "ts", p.FILE_HEADER.TimeDateStamp, "entry", hex(o.AddressOfEntryPoint), "base", hex(o.ImageBase))
+print("managed(.NET)" if len(o.DATA_DIRECTORY) > 14 and o.DATA_DIRECTORY[14].VirtualAddress else "native")
+for s in p.sections: print(dec(s.Name.rstrip(b"\0")), hex(s.VirtualAddress), "raw", s.SizeOfRawData, "ent", round(s.get_entropy(), 2))
+for d in getattr(p, "DIRECTORY_ENTRY_IMPORT", []): print(dec(d.dll), [dec(i.name) if i.name else f"ord#{i.ordinal}" for i in d.imports][:30])
+for e in getattr(getattr(p, "DIRECTORY_ENTRY_EXPORT", None), "symbols", [])[:80]: print("exp", dec(e.name) if e.name else f"ord#{e.ordinal}", hex(e.address))
 E
-diec $T 2>/dev/null; floss -q $T 2>/dev/null | head -150
+diec "$T" 2>/dev/null; floss -q "$T" 2>/dev/null | head -150
 ```
-No pefile: `objdump -p -h $T` (or `llvm-objdump -p`). Windows programs mostly use UTF-16, so always also run `strings -a -el -n 8 $T`.
+No pefile: `objdump -p -h "$T"` (or `llvm-objdump -p "$T"`). Windows programs mostly use UTF-16, so always also run `strings -a -el -n 8 "$T"`.
 
 ## 2. Packed?
 Suspect packing if section entropy > 7.2, names like `UPX0`/`.vmp0`/`.themida`, `.text` raw size 0, or an import table with only `LoadLibrary`/`GetProcAddress`. Unpack first (`upx -d`, or a sandbox dump) and analyze the unpacked file. State plainly that the original was packed.
@@ -41,18 +42,21 @@ Decompile-all on a large PE can take tens of minutes. Do it in this order: (a) d
 
 Script (arguments: output file, optional function-name regex, optional low and high address, hex):
 ```sh
-mkdir -p $D/gh $D/scripts && cat > $D/scripts/DumpDecomp.java <<'J'
+mkdir -p "$D/gh" "$D/scripts" && cat > "$D/scripts/DumpDecomp.java" <<'J'
 import ghidra.app.script.GhidraScript;
 import ghidra.app.decompiler.*;
 import ghidra.program.model.listing.Function;
 import java.io.PrintWriter;
 public class DumpDecomp extends GhidraScript {
+  private static long parseAddr(String s) {
+    return (s.startsWith("0x") || s.startsWith("0X")) ? Long.parseUnsignedLong(s.substring(2), 16) : Long.parseUnsignedLong(s);
+  }
   public void run() throws Exception {
     String[] a = getScriptArgs();
     String out = a.length > 0 ? a[0] : "decomp.c";
     String rx  = a.length > 1 ? a[1] : ".*";
-    long lo = a.length > 2 ? Long.decode(a[2]) : 0L;
-    long hi = a.length > 3 ? Long.decode(a[3]) : Long.MAX_VALUE;
+    long lo = a.length > 2 ? parseAddr(a[2]) : 0L;
+    long hi = a.length > 3 ? parseAddr(a[3]) : -1L; // 0xffffffffffffffff unsigned
     DecompInterface d = new DecompInterface();
     d.openProgram(currentProgram);
     try (PrintWriter w = new PrintWriter(out)) {
@@ -60,7 +64,7 @@ public class DumpDecomp extends GhidraScript {
         if (monitor.isCancelled()) break;
         if (f.isExternal() || f.isThunk()) continue;
         long addr = f.getEntryPoint().getOffset();
-        if (addr < lo || addr > hi || !f.getName().matches(rx)) continue;
+        if (Long.compareUnsigned(addr, lo) < 0 || Long.compareUnsigned(addr, hi) > 0 || !f.getName().matches(rx)) continue;
         DecompileResults r = d.decompileFunction(f, 30, monitor);
         if (r.decompileCompleted()) {
           w.println("// " + f.getName() + " @ " + f.getEntryPoint() + "\n" + r.getDecompiledFunction().getC());
@@ -77,17 +81,17 @@ J
 
 (a) Targeted run (a name pattern, or an address range found from strings/xrefs). Usually seconds to a few minutes:
 ```sh
-analyzeHeadless $D/gh proj -import $T -scriptPath $D/scripts -postScript DumpDecomp.java $D/decomp.c '.*(Config|Parse|Send).*' -analysisTimeoutPerFile 600 -deleteProject
+analyzeHeadless "$D/gh" proj -import "$T" -scriptPath "$D/scripts" -postScript DumpDecomp.java "$D/decomp.c" '.*(Config|Parse|Send).*' -analysisTimeoutPerFile 600 -deleteProject
 ```
-Stripped binaries have names like `FUN_140001000`, so use an address range instead: `... $D/decomp.c '.*' 0x140001000 0x140005000 ...`.
+Stripped binaries have names like `FUN_140001000`, so use an address range instead: `... "$D/decomp.c" '.*' 0x140001000 0x140005000 ...`.
 
 (b) Whole program, in the background (do not block on it):
 ```sh
-nohup analyzeHeadless $D/gh proj -import $T -scriptPath $D/scripts -postScript DumpDecomp.java $D/decomp.c -analysisTimeoutPerFile 1800 -deleteProject > $D/gh.log 2>&1 &
+nohup analyzeHeadless "$D/gh" proj -import "$T" -scriptPath "$D/scripts" -postScript DumpDecomp.java "$D/decomp.c" -analysisTimeoutPerFile 1800 -deleteProject > "$D/gh.log" 2>&1 &
 # poll, do not wait:
-tail -n 3 $D/gh.log; grep -c '^// ' $D/decomp.c
+tail -n 3 "$D/gh.log"; grep -c '^// ' "$D/decomp.c"
 ```
-Work from the partial `decomp.c` while it grows. Then `rg -n NEEDLE $D/decomp.c` and read only the matching functions. Fallbacks: `r2 -qc 'aaa; afl; pdc @ main' $T`, or `objdump -d -M intel $T`.
+Work from the partial `decomp.c` while it grows. Then `rg -n NEEDLE "$D/decomp.c"` and read only the matching functions. Fallbacks: `r2 -qc 'aaa; afl; pdc @ main' "$T"`, or `objdump -d -M intel "$T"`.
 
 ## 6. Rebuild a program (e.g. C++20 or C#) and verify
 This loop is exempt from the 2-4 call budget in `SKILL.md`. Confirm the user is entitled to rebuild this program (see Scope) before starting.

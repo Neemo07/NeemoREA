@@ -45,24 +45,24 @@ Many first moves use macOS tools. On Linux sandboxes or native Windows hosts, us
 ## First move: one call each, paste and run
 Native (Mach-O):
 ```sh
-T=./bin; D=${TMPDIR:-/tmp}/re/$(basename $T); mkdir -p $D; file $T; lipo -info $T; otool -L $T; echo '--- EXPORTS'; nm -gU $T | head -150; echo '--- IMPORTS'; nm -u $T | rg -v '^__Z|napi_' | tr '\n' ' '; echo; echo '--- STRINGS'; strings -a -n 6 $T | rg -v '^[_$.]' | head -400; otool -tV $T > $D/dis.txt; echo '--- FUNCS'; rg '^[_a-zA-Z].*:$' $D/dis.txt | rg -v '^_?_?Z?N?St3' | head -150
+T=./bin; D="${TMPDIR:-/tmp}/re/$(basename "$T")"; mkdir -p "$D"; file "$T"; lipo -info "$T"; otool -L "$T"; echo '--- EXPORTS'; nm -gU "$T" | head -150; echo '--- IMPORTS'; nm -u "$T" | rg -v '^__Z|napi_' | tr '\n' ' '; echo; echo '--- STRINGS'; strings -a -n 6 "$T" | rg -v '^[_$.]' | head -400; otool -tV "$T" > "$D/dis.txt"; echo '--- FUNCS'; rg '^[_a-zA-Z].*:$' "$D/dis.txt" | rg -v '^_?_?Z?N?St3' | head -150
 ```
 Then read one function:
 ```sh
-awk '/^FUNC_LABEL:$/{p=1;next} p&&/^[_a-zA-Z].*:$/{exit} p' $D/dis.txt | rg 'bl|b\.|cmp|literal|mov\s+w2'
+awk '/^FUNC_LABEL:$/{p=1;next} p&&/^[_a-zA-Z].*:$/{exit} p' "$D/dis.txt" | rg 'bl|b\.|cmp|literal|mov\s+w2'
 ```
 
 ELF / PE (also tells you which tools exist, so you pick once):
 ```sh
-T=./bin; D=${TMPDIR:-/tmp}/re/$(basename $T); mkdir -p $D; file -b $T; (shasum -a 256 $T || sha256sum $T) 2>/dev/null | cut -c1-16; echo '--- TOOLS'; for t in rg jq r2 objdump llvm-objdump readelf diec floss analyzeHeadless ilspycmd upx python3; do command -v $t >/dev/null && echo -n "$t "; done; echo; echo '--- HEADERS'; (objdump -p -h $T 2>/dev/null || readelf -hlSW $T) | head -150; echo '--- STRINGS'; strings -a -n 8 $T | head -150; echo '--- UTF16'; strings -a -el -n 8 $T | head -150
+T=./bin; D="${TMPDIR:-/tmp}/re/$(basename "$T")"; mkdir -p "$D"; file -b "$T"; (shasum -a 256 "$T" || sha256sum "$T") 2>/dev/null | cut -c1-16; echo '--- TOOLS'; for t in rg jq r2 objdump llvm-objdump readelf diec floss analyzeHeadless ilspycmd upx python3; do command -v "$t" >/dev/null && echo -n "$t "; done; echo; echo '--- HEADERS'; (objdump -p -h "$T" 2>/dev/null || readelf -hlSW "$T") | head -150; echo '--- STRINGS'; strings -a -n 8 "$T" | head -150; echo '--- UTF16'; strings -a -el -n 8 "$T" | head -150
 ```
 PE next: `references/pe.md` (packer check, RTTI/PDB, headless Ghidra).
 
 Electron:
 ```sh
-A=./app.asar; X=${TMPDIR:-/tmp}/re/asar; rm -rf $X; npx -y @electron/asar extract $A $X && jq '{name,version,main}' $X/package.json; find $X -path '*/node_modules' -prune -o -type f \( -name '*.js' -o -name '*.node' \) -print | head -60; ls ${A}.unpacked/node_modules 2>/dev/null; rg -uu -l --glob '!node_modules' 'exposeInMainWorld' $X
+A=./app.asar; X="${TMPDIR:-/tmp}/re/asar"; rm -rf "$X"; npx -y @electron/asar extract "$A" "$X" && jq '{name,version,main}' "$X/package.json"; find "$X" -path '*/node_modules' -prune -o -type f \( -name '*.js' -o -name '*.node' \) -print | head -60; ls "${A}.unpacked/node_modules" 2>/dev/null; rg -uu -l --glob '!node_modules' 'exposeInMainWorld' "$X"
 ```
-Then slice the needle across the bundle: `rg -uu -o --glob '!node_modules' '.{0,250}NEEDLE.{0,250}' $X | head -20`.
+Then slice the needle across the bundle: `rg -uu -o --glob '!node_modules' '.{0,250}NEEDLE.{0,250}' "$X" | head -20`.
 
 Go: `go version -m T` alone usually answers the question.
 
@@ -73,7 +73,7 @@ Short pointers only. Longer commands are in "Recipes" below, where `|` is a real
 |---|---|
 | Electron app (`*.app/Contents/Resources/app.asar`) | Extract with `@electron/asar` (also see `app.asar.unpacked/` for `.node` addons). Entry point: `jq .main X/package.json`. IPC and security surface: recipe **Electron surface**. Fuses: `npx -y @electron/fuses read --app A.app`. If extraction fails on integrity, retry with the tool's skip/continue flag rather than abandoning the route. |
 | Node SEA / `pkg` single-file | Sentinel `NODE_SEA_FUSE_` or `NODE_SEA_BLOB` in `strings`. The embedded script is usually plain text inside the blob: slice it out with `rg -a -o`. |
-| Web bundle / minified JS | Find `sourceMappingURL`. If the map has `sourcesContent`, dump the sources: `jq -r '.sources[]'`. For webpack, grep the module ids, then slice around the hit. For pretty-print: `npx -y prettier --parser babel F > F.pretty.js`, then read with line ranges. |
+| Web bundle / minified JS | Find `sourceMappingURL`. List mapped files with `jq -r '.sources[]' F.map`; if `sourcesContent` is present, dump the actual sources: `jq -r '.sources as $s | (.sourcesContent // []) | to_entries[] | select(.value != null) | "=== \($s[.key]) ===\n\(.value)"' F.map > "$D/sources.txt"`. For webpack, grep the module ids, then slice around the hit. For pretty-print: `npx -y prettier --parser babel F > F.pretty.js`, then read with line ranges. |
 | Hermes / bytenode / V8 snapshot | Hermes magic is `c6 1f bc 03` (`index.android.bundle`): use `hermes-dec` / `hbc-decompiler`. `.jsc` (bytenode) cannot be decompiled: use strings and runtime hooks. |
 | Chrome extension (`.crx`, `Cr24` magic) | `unzip` works (it warns about the header). Read `manifest.json` first: permissions, background/service worker, content scripts. Then treat the JS as a web bundle. |
 | Mach-O (`file`: Mach-O) | First-move block above. Thin a fat binary first. Also: `xcrun dyld_info -exports -imports`, `otool -l` for `LC_RPATH`/`LC_BUILD_VERSION`, `codesign -d --entitlements :- T`, `otool -ov` for ObjC, `xcrun swift-demangle --compact`. See the Linux map for non-macOS hosts. |
