@@ -11,7 +11,7 @@ NeemoREA gives an agent the fastest known command path for each target type, the
 - Native binaries: Mach-O, ELF, PE (`.exe` / `.dll`), with a macOS / Linux / Windows tool map
 - Go binaries (`go version -m`, stripped symbols), Rust binaries (cargo-auditable deps, rustc commit, crate paths)
 - Tauri and Wails apps
-- .NET assemblies (`ilspycmd`, P/Invoke), Unity (Mono and IL2CPP)
+- .NET assemblies (`ilspycmd`, P/Invoke, `.NET 6+` single-file `AppHost` bundles, WPF `BAML`->`XAML`, Costura, R2R/NativeAOT — `references/dotnet.md`), Unity (Mono and IL2CPP)
 - Java (`.jar` / `.class` / `.war`)
 - Python bundles (PyInstaller, `.pyc`)
 - Android APKs (`jadx`, `apktool`, Flutter / React Native / Hermes detection), iOS IPAs
