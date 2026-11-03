@@ -1,10 +1,17 @@
 # PE (.exe/.dll), headless Ghidra, rebuild-and-verify
 
-Read only when the target is PE, or when Ghidra pseudocode or a rebuild is needed. Static analysis only; never run the sample on the host.
+Read only when the target is PE, or when Ghidra pseudocode or a rebuild is needed. Static analysis only; never run the sample on the host. Only analyze or rebuild software the user is authorized to work on (see Scope in `SKILL.md`).
+
+Contents: 1 Triage · 2 Packed? · 3 Structure for free · 4 Locate behavior · 5 Ghidra decompile · 6 Rebuild and verify
+
+## 0. Setup (run first, every command below assumes it)
+```sh
+T=./x.exe; D=${TMPDIR:-/tmp}/re/$(basename $T); mkdir -p $D
+```
 
 ## 1. Triage (one call)
 ```sh
-T=./x.exe; python3 - $T <<'E'
+python3 - $T <<'E'
 import sys,pefile
 p=pefile.PE(sys.argv[1]); o=p.OPTIONAL_HEADER
 print("machine",hex(p.FILE_HEADER.Machine),"subsys",o.Subsystem,"ts",p.FILE_HEADER.TimeDateStamp,"entry",hex(o.AddressOfEntryPoint),"base",hex(o.ImageBase))
@@ -21,15 +28,18 @@ No pefile: `objdump -p -h $T` (or `llvm-objdump -p`). Windows programs mostly us
 Suspect packing if section entropy > 7.2, names like `UPX0`/`.vmp0`/`.themida`, `.text` raw size 0, or an import table with only `LoadLibrary`/`GetProcAddress`. Unpack first (`upx -d`, or a sandbox dump) and analyze the unpacked file. State plainly that the original was packed.
 
 ## 3. Structure for free
-- PDB path and source paths: `strings -a T | rg -i '\.pdb|\.(cpp|h|cs)\b|__FILE__'`
-- C++ classes: `strings -a T | rg '\.\?AV[A-Za-z0-9_@]+'` (MSVC RTTI)
-- Toolchain: Rich header / CRT strings (`MSVCP`, `VCRUNTIME`), `strings T | rg -i 'msvc|mingw|gcc'`
-- Resources: `7z l T` or `wrestool -l T`
+- PDB path and source paths: `strings -a $T | rg -i '\.pdb|\.(cpp|h|cs)\b|__FILE__'`
+- C++ classes: `strings -a $T | rg '\.\?AV[A-Za-z0-9_@]+'` (MSVC RTTI)
+- Toolchain: Rich header / CRT strings (`MSVCP`, `VCRUNTIME`), `strings $T | rg -i 'msvc|mingw|gcc'`
+- Resources: `7z l $T` or `wrestool -l $T`
 
 ## 4. Locate behavior by evidence
 Imports and strings first. Networking: `WSAStartup connect send recv WSASend WinHttp* InternetOpen*`. Files: `CreateFileW ReadFile`. Registry: `RegOpenKeyEx*`. Crypto: `BCrypt* Crypt*`. Process: `CreateProcessW VirtualAlloc WriteProcessMemory`. Then open the function that references them and read its call sequence. For a wire protocol, read the struct writes just before `send`/`WSASend` (opcode, length, field order) and confirm with a pcap if available.
 
-## 5. Decompile everything (Ghidra headless)
+## 5. Decompile (Ghidra headless)
+Decompile-all on a large PE can take tens of minutes. Do it in this order: (a) decompile only a filtered set, (b) if you really need everything, run in the background and poll.
+
+Script (arguments: output file, optional function-name regex, optional low and high address, hex):
 ```sh
 mkdir -p $D/gh $D/scripts && cat > $D/scripts/DumpDecomp.java <<'J'
 import ghidra.app.script.GhidraScript;
@@ -38,24 +48,49 @@ import ghidra.program.model.listing.Function;
 import java.io.PrintWriter;
 public class DumpDecomp extends GhidraScript {
   public void run() throws Exception {
-    String out = getScriptArgs().length > 0 ? getScriptArgs()[0] : "decomp.c";
+    String[] a = getScriptArgs();
+    String out = a.length > 0 ? a[0] : "decomp.c";
+    String rx  = a.length > 1 ? a[1] : ".*";
+    long lo = a.length > 2 ? Long.decode(a[2]) : 0L;
+    long hi = a.length > 3 ? Long.decode(a[3]) : Long.MAX_VALUE;
     DecompInterface d = new DecompInterface();
     d.openProgram(currentProgram);
     try (PrintWriter w = new PrintWriter(out)) {
       for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
-        DecompileResults r = d.decompileFunction(f, 60, monitor);
-        if (r.decompileCompleted())
+        if (monitor.isCancelled()) break;
+        if (f.isExternal() || f.isThunk()) continue;
+        long addr = f.getEntryPoint().getOffset();
+        if (addr < lo || addr > hi || !f.getName().matches(rx)) continue;
+        DecompileResults r = d.decompileFunction(f, 30, monitor);
+        if (r.decompileCompleted()) {
           w.println("// " + f.getName() + " @ " + f.getEntryPoint() + "\n" + r.getDecompiledFunction().getC());
+          w.flush();   // so progress is visible while polling
+        }
       }
+    } finally {
+      d.dispose();     // release the decompiler process
     }
   }
 }
 J
-analyzeHeadless $D/gh proj -import $T -scriptPath $D/scripts -postScript DumpDecomp.java $D/decomp.c -deleteProject
 ```
-Then `rg -n NEEDLE $D/decomp.c` and read only the matching functions. Fallbacks: `r2 -qc 'aaa; afl; pdc @ main' T`, or `objdump -d -M intel`.
+
+(a) Targeted run (a name pattern, or an address range found from strings/xrefs). Usually seconds to a few minutes:
+```sh
+analyzeHeadless $D/gh proj -import $T -scriptPath $D/scripts -postScript DumpDecomp.java $D/decomp.c '.*(Config|Parse|Send).*' -analysisTimeoutPerFile 600 -deleteProject
+```
+Stripped binaries have names like `FUN_140001000`, so use an address range instead: `... $D/decomp.c '.*' 0x140001000 0x140005000 ...`.
+
+(b) Whole program, in the background (do not block on it):
+```sh
+nohup analyzeHeadless $D/gh proj -import $T -scriptPath $D/scripts -postScript DumpDecomp.java $D/decomp.c -analysisTimeoutPerFile 1800 -deleteProject > $D/gh.log 2>&1 &
+# poll, do not wait:
+tail -n 3 $D/gh.log; grep -c '^// ' $D/decomp.c
+```
+Work from the partial `decomp.c` while it grows. Then `rg -n NEEDLE $D/decomp.c` and read only the matching functions. Fallbacks: `r2 -qc 'aaa; afl; pdc @ main' $T`, or `objdump -d -M intel $T`.
 
 ## 6. Rebuild a program (e.g. C++20 or C#) and verify
+This loop is exempt from the 2-4 call budget in `SKILL.md`. Confirm the user is entitled to rebuild this program (see Scope) before starting.
 1. Inventory first, saved to `$D/inventory.md`: exports, imports, classes (RTTI), strings, resources, section sizes, paths.
 2. Mirror the original's folder/file layout and names exactly where evidenced (PDB paths, `__FILE__` strings, resource names). Mark any guessed name **inferred**.
 3. Write module by module. Do not paste raw decompiler output: rename, type and idiomatize (RAII, `std::span`, `std::string_view`, `enum class`).
