@@ -48,15 +48,23 @@ README.md           This file
 
 ## Install
 
-Copy this folder into your agent's skills directory, preserving `SKILL.md` and `references/`:
+Use `install.sh` to install `SKILL.md` and `references/` for **OpenCode**, **Claude Code**, **Codex CLI**, or **Cursor**:
+
+```sh
+./install.sh --opencode          # ~/.config/opencode/skills/neemorea
+./install.sh --claude            # ~/.claude/skills/neemorea
+./install.sh --codex             # ~/.agents/skills/neemorea
+./install.sh --cursor            # ~/.cursor/rules/neemorea.mdc (+ references/)
+./install.sh --all               # all four targets (--uninstall to remove)
+```
+
+Or copy manually into any agent skill directory (folder name should match `neemorea`):
 
 ```sh
 cp -R neemorea ~/.claude/skills/neemorea
-# or
+cp -R neemorea ~/.config/opencode/skills/neemorea
 cp -R neemorea ~/.agents/skills/neemorea
 ```
-
-Any agent that loads markdown skills from a directory works the same way; the folder name should match the skill name (`neemorea`).
 
 ## Usage
 
