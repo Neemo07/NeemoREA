@@ -24,23 +24,23 @@ Analyze only software the user owns or is authorized to analyze (own code, licen
 - Downloads: `npx -y` and `pip install` fetch from the network. Use them only if the network is available and the user has not forbidden installs. If the network is restricted, use an installed equivalent or ask once.
 - Turns cost more than bytes. Aim for 2-4 tool calls for an explain/inventory task: one batched recon call, one or two targeted slices, then answer. Stop when every item you were asked has evidence. Do not re-verify what you already saw. **Exempt:** rebuild tasks and multi-binary comparisons. They follow the loop in `references/pe.md` section 6 and need as many calls as the loop takes.
 
-## Linux and macOS tool map
-Many first moves use macOS tools. On Linux (most sandboxes) use the right column.
+## macOS, Linux, and Windows tool map
+Many first moves use macOS tools. On Linux sandboxes or native Windows hosts, use the matching column.
 
-| macOS | Linux fallback |
-|---|---|
-| `otool -L T` | `llvm-objdump --macho --dylibs-used T` or `llvm-otool -L T` |
-| `otool -tV T` | `llvm-objdump -d --macho --no-show-raw-insn T` (or `objdump -d` for ELF) |
-| `otool -ov T` (ObjC) | `llvm-objdump --macho --objc-meta-data T` |
-| `lipo -info` / `-thin` | `llvm-lipo -info` / `llvm-lipo -thin arm64 -output T1 T` |
-| `nm -gU T` | `llvm-nm -gU T` (ELF: `nm -D --defined-only T`) |
-| `xcrun dyld_info` | `llvm-objdump --macho --exports-trie --bind T` |
-| `codesign -d --entitlements :- T` | `rcodesign print-signature-info T` or `ldid -e T` |
-| `plutil -p F` | `plistutil -i F` or `python3 -c 'import plistlib,sys,pprint;pprint.pprint(plistlib.load(open(sys.argv[1],"rb")))' F` |
-| `xcrun swift-demangle` | `swift-demangle` (from a Swift toolchain), else `c++filt` for C++ names |
-| `assetutil` | no equivalent; list the `.car` with `strings`, or skip |
-| `cp -c` | `cp -R` |
-| `shasum -a 256` | `sha256sum` |
+| macOS | Linux fallback | Windows native (VS / PowerShell) |
+|---|---|---|
+| `otool -L T` | `llvm-objdump --macho --dylibs-used T` or `llvm-otool -L T` | `dumpbin /dependents T` or `llvm-objdump -p T` |
+| `otool -tV T` | `llvm-objdump -d --macho --no-show-raw-insn T` (ELF: `objdump -d`) | `dumpbin /disasm:nobytes T` or `llvm-objdump -d -M intel T` |
+| `otool -ov T` (ObjC) | `llvm-objdump --macho --objc-meta-data T` | `llvm-objdump --macho --objc-meta-data T` |
+| `lipo -info` / `-thin` | `llvm-lipo -info` / `llvm-lipo -thin arm64 -output T1 T` | `llvm-lipo -info` / `llvm-lipo -thin arm64 -output T1 T` |
+| `nm -gU T` | `llvm-nm -gU T` (ELF: `nm -D --defined-only T`) | `dumpbin /exports T` or `llvm-nm -g T` |
+| `xcrun dyld_info` | `llvm-objdump --macho --exports-trie --bind T` | `dumpbin /imports /exports T` (PE) |
+| `codesign -d --entitlements :- T` | `rcodesign print-signature-info T` or `ldid -e T` | `Get-AuthenticodeSignature T \| Format-List *` or `sigcheck -a T` |
+| `plutil -p F` | `plistutil -i F` or `python3 -c 'import plistlib,sys,pprint;pprint.pprint(plistlib.load(open(sys.argv[1],"rb")))' F` | `python -c "import plistlib,sys,pprint;pprint.pprint(plistlib.load(open(sys.argv[1],'rb')))" F` |
+| `xcrun swift-demangle` | `swift-demangle` (Swift toolchain), else `c++filt` | `undname` (MSVC C++) or `llvm-cxxfilt` |
+| `strings -a -el T` | `strings -a -el T` | `floss -q T` or `strings64 -accepteula -n 8 T` |
+| `cp -c` | `cp -R` | `Copy-Item -Recurse` |
+| `shasum -a 256` | `sha256sum` | `certutil -hashfile T SHA256` or `(Get-FileHash T).Hash` |
 
 ## First move: one call each, paste and run
 Native (Mach-O):
@@ -89,7 +89,7 @@ Short pointers only. Longer commands are in "Recipes" below, where `|` is a real
 | Java (`.jar`, `.class`, `.war`) | `unzip -l a.jar`; read `META-INF/MANIFEST.MF` (Main-Class). Decompile: `jadx -d X a.jar` (or `cfr`, `fernflower`). Quick signatures without decompiling: `javap -p -c -classpath a.jar com.Foo`. |
 | Python bundle (PyInstaller, `.pyc`) | PyInstaller: `strings -a T`, filter `pyi-` or `PYZ`; extract with `pyinstxtractor.py`. Then decompile `.pyc` with `pycdc` or `decompyle3` (the pyc magic number tells the Python version; newer versions are poorly supported, fall back to `python3 -m dis`). Nuitka and Cython output is native: use the native rows. |
 | Android APK | `jadx -d X --show-bad-code a.apk` then `rg`. Resources/manifest only: `apktool d --no-src -o X a.apk`. Quick look: `unzip -l a.apk`. `lib/*/libflutter.so` means Flutter (Dart AOT: `blutter`); `libhermes.so` means React Native (Hermes row). |
-| Flutter snapshot hash | In `libapp.so`, find magic `f5 f5 dc dc`; the 32 hex chars at +20 are the snapshot hash. Map it to a Dart version. |
+| Flutter snapshot hash | In `libapp.so`, find magic `f5 f5 dc dc`; the 32 hex chars at +20 are the snapshot hash. Map it to a Dart version. Deeper APK/IPA, FairPlay `cryptid`, `blutter`, Hermes HBC, Xamarin `XALZ` & IL2CPP workflows: `references/mobile.md`. |
 | WASM | `wasm-objdump -x`, `wasm2wat`, `wasm-decompile` (WABT). |
 | SQLite | Copy the db, plus the `-wal` file if present. `sqlite3 'file:C?mode=ro' '.schema'`, then `SELECT * FROM t LIMIT 20`. |
 | plist / nib / car | `plutil -p F` (Linux: see the map). Info.plist holds the bundle id, URL schemes and privacy strings. Asset catalogs: `assetutil --info Assets.car`. |
@@ -101,7 +101,7 @@ Short pointers only. Longer commands are in "Recipes" below, where `|` is a real
 ## Recipes
 Real shell pipes below. Copy as is.
 
-**Electron surface** (X is the extracted asar dir)
+**Electron surface** (X is the extracted asar dir; offline Python ASAR unpacker, Fuse byte-vector reader, `.node` addons & Bytenode/SEA in `references/electron.md`)
 ```sh
 rg -n -o -uu --glob '!node_modules' '.{0,120}(ipcMain\.(handle|handleOnce|on|once)|ipcRenderer\.(invoke|send|sendSync|on)|contextBridge\.exposeIn(Main|Isolated)World|webPreferences|preload:|nodeIntegration|contextIsolation|sandbox|\.node\b).{0,160}' $X | head -80
 # App-specific IPC wrappers often hide the channels, so also list channel-like strings in the main file:

@@ -6,16 +6,16 @@ NeemoREA gives an agent the fastest known command path for each target type, the
 
 ## What it covers
 
-- Electron apps (`app.asar`, Fuses, IPC surface, preload/main/renderer boundaries, native `.node` addons), Node SEA
+- Electron apps (`app.asar`, Fuses, IPC surface, preload/main/renderer boundaries, native `.node` addons — `references/electron.md`), Node SEA
 - Web bundles and minified JavaScript (source maps, webpack module ids, prettier), Chrome extensions (`.crx`)
-- Native binaries: Mach-O, ELF, PE (`.exe` / `.dll`), with a macOS-to-Linux tool map
+- Native binaries: Mach-O, ELF, PE (`.exe` / `.dll`), with a macOS / Linux / Windows tool map
 - Go binaries (`go version -m`, stripped symbols), Rust binaries (cargo-auditable deps, rustc commit, crate paths)
 - Tauri and Wails apps
 - .NET assemblies (`ilspycmd`, P/Invoke), Unity (Mono and IL2CPP)
 - Java (`.jar` / `.class` / `.war`)
 - Python bundles (PyInstaller, `.pyc`)
 - Android APKs (`jadx`, `apktool`, Flutter / React Native / Hermes detection), iOS IPAs
-- Flutter Dart AOT snapshots (hash lookup)
+- Flutter Dart AOT snapshots (hash lookup, `blutter`, plus APK/IPA/Hermes/IL2CPP workflows in `references/mobile.md`)
 - WASM (`wasm-objdump`, WABT)
 - SQLite databases (read-only, WAL copied)
 - plist / nib / asset catalogs
